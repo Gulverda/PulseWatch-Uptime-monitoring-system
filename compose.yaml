@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16
+    container_name: pulsewatch-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: pulsewatch
+      POSTGRES_PASSWORD: pulsewatch_dev
+      POSTGRES_DB: pulsewatch
+    ports:
+      - "5433:5432"
+    volumes:
+      - pulsewatch_data:/var/lib/postgresql/data
+
+volumes:
+  pulsewatch_data:
