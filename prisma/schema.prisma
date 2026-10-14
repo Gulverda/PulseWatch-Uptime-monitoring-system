@@ -8,14 +8,16 @@ datasource db {
   provider = "postgresql"
 }
 
-model Monitor {
-  id        String   @id @default(cuid())
-  url       String
-  isActive  Boolean  @default(true)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
 
-  checks    Check[]
+model Monitor {
+  id              String   @id @default(cuid())
+  url             String
+  isActive        Boolean  @default(true)
+  intervalSeconds Int      @default(60)
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  checks          Check[]
 }
 
 model Check {

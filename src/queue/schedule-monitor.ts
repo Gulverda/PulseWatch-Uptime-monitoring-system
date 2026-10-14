@@ -1,17 +1,13 @@
 import { monitorQueue } from "./monitor-queue.js";
 
-export interface MonitorCheckJob {
-  monitorId: string;
-  url: string;
-}
-
 export async function scheduleMonitor(
   monitorId: string,
   url: string,
+  intervalSeconds = 60,
 ): Promise<void> {
   await monitorQueue.upsertJobScheduler(
     `monitor-${monitorId}`,
-    { every: 60_000 },
+    { every: intervalSeconds * 1_000 },
     {
       name: "check-monitor",
       data: { monitorId, url },
