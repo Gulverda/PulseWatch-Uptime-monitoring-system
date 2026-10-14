@@ -1,6 +1,11 @@
 import Fastify from "fastify";
 import { prisma } from "./lib/prisma.js";
-import { monitorQueue } from "./queue/monitor-queue.js";
+import { monitorQueue, monitorQueueConnection } from "./queue/monitor-queue.js";
+import {
+  scheduleMonitor,
+  unscheduleMonitor,
+} from "./queue/schedule-monitor.js";
+import { validateMonitorUrl } from "./monitoring/validate-url.js";
 
 const app = Fastify({
   logger: true,
@@ -12,6 +17,120 @@ app.get("/health", async () => {
     service: "pulsewatch",
   };
 });
+
+app.patch<{ Params: { id: string } }>(
+  "/monitors/:id/pause",
+  async (request, reply) => {
+    const { id } = request.params;
+
+    const monitor = await prisma.monitor.findUnique({
+      where: { id },
+    });
+
+    if (!monitor) {
+      return reply.code(404).send({
+        error: "Monitor not found",
+      });
+    }
+
+    if (!monitor.isActive) {
+      return reply.code(200).send({
+        message: "Monitor is already paused",
+        monitor,
+      });
+    }
+
+    await prisma.monitor.update({
+      where: { id },
+      data: { isActive: false },
+    });
+
+    await unscheduleMonitor(id);
+
+    return reply.code(200).send({
+      message: "Monitor paused",
+      monitorId: id,
+    });
+  },
+);
+
+app.patch<{ Params: { id: string } }>(
+  "/monitors/:id/resume",
+  async (request, reply) => {
+    const { id } = request.params;
+
+    const monitor = await prisma.monitor.findUnique({
+      where: { id },
+    });
+
+    if (!monitor) {
+      return reply.code(404).send({
+        error: "Monitor not found",
+      });
+    }
+
+    if (monitor.isActive) {
+      return reply.code(200).send({
+        message: "Monitor is already active",
+        monitor,
+      });
+    }
+
+    await prisma.monitor.update({
+      where: { id },
+      data: { isActive: true },
+    });
+
+    await scheduleMonitor(monitor.id, monitor.url);
+
+    await monitorQueue.add(
+      "check-monitor",
+      {
+        monitorId: monitor.id,
+        url: monitor.url,
+      },
+      {
+        attempts: 3,
+        backoff: { type: "exponential", delay: 1_000 },
+        removeOnComplete: 100,
+        removeOnFail: 100,
+      },
+    );
+
+    return reply.code(200).send({
+      message: "Monitor resumed; check queued",
+      monitorId: id,
+    });
+  },
+);
+
+app.delete<{ Params: { id: string } }>(
+  "/monitors/:id",
+  async (request, reply) => {
+    const { id } = request.params;
+
+    const monitor = await prisma.monitor.findUnique({
+      where: { id },
+    });
+
+    if (!monitor) {
+      return reply.code(404).send({
+        error: "Monitor not found",
+      });
+    }
+
+    await unscheduleMonitor(id);
+
+    await prisma.monitor.delete({
+      where: { id },
+    });
+
+    return reply.code(200).send({
+      message: "Monitor deleted",
+      monitorId: id,
+    });
+  },
+);
 
 app.get("/monitors", async () => {
   return prisma.monitor.findMany({
@@ -52,16 +171,10 @@ app.post<{
     let parsedUrl: URL;
 
     try {
-      parsedUrl = new URL(request.body.url);
-    } catch {
+      parsedUrl = await validateMonitorUrl(request.body.url);
+    } catch (error) {
       return reply.code(400).send({
-        error: "Invalid URL",
-      });
-    }
-
-    if (!["http:", "https:"].includes(parsedUrl.protocol)) {
-      return reply.code(400).send({
-        error: "Only HTTP and HTTPS URLs are allowed",
+        error: error instanceof Error ? error.message : "Invalid URL",
       });
     }
 
@@ -71,13 +184,41 @@ app.post<{
       },
     });
 
-    await monitorQueue.add("check-monitor", {
-      monitorId: monitor.id,
-      url: monitor.url,
-    });
+    try {
+      // Queue the initial check immediately.
+      await monitorQueue.add(
+        "check-monitor",
+        {
+          monitorId: monitor.id,
+          url: monitor.url,
+        },
+        {
+          attempts: 3,
+          backoff: {
+            type: "exponential",
+            delay: 1_000,
+          },
+          removeOnComplete: 100,
+          removeOnFail: 100,
+        },
+      );
+
+      // Schedule recurring checks every 60 seconds.
+      await scheduleMonitor(monitor.id, monitor.url);
+    } catch (error) {
+      request.log.error(
+        { error, monitorId: monitor.id },
+        "Failed to queue or schedule monitor",
+      );
+
+      return reply.code(503).send({
+        error: "Monitor was created, but scheduling failed",
+        monitorId: monitor.id,
+      });
+    }
 
     return reply.code(202).send({
-      message: "Monitor created; check queued",
+      message: "Monitor created; check queued and scheduled",
       monitor,
     });
   },
@@ -85,23 +226,52 @@ app.post<{
 
 const start = async () => {
   try {
+    const activeMonitors = await prisma.monitor.findMany({
+      where: {
+        isActive: true,
+      },
+      select: {
+        id: true,
+        url: true,
+      },
+    });
+
+    await Promise.all(
+      activeMonitors.map((monitor) => scheduleMonitor(monitor.id, monitor.url)),
+    );
+
+    app.log.info(`Scheduled ${activeMonitors.length} active monitors`);
+
     await app.listen({
       port: 3000,
       host: "127.0.0.1",
     });
   } catch (error) {
     app.log.error(error);
-    process.exit(1);
+    process.exitCode = 1;
   }
 };
 
+let isShuttingDown = false;
+
 const shutdown = async () => {
-  await app.close();
-  await prisma.$disconnect();
-  process.exit(0);
+  if (isShuttingDown) return;
+  isShuttingDown = true;
+
+  try {
+    await app.close();
+    await monitorQueue.close();
+    await monitorQueueConnection.quit();
+    await prisma.$disconnect();
+
+    app.log.info("PulseWatch API shut down gracefully");
+  } catch (error) {
+    app.log.error(error, "Error during shutdown");
+    process.exitCode = 1;
+  }
 };
 
-process.on("SIGINT", shutdown);
-process.on("SIGTERM", shutdown);
+process.on("SIGINT", () => void shutdown());
+process.on("SIGTERM", () => void shutdown());
 
-start();
+void start();

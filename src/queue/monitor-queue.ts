@@ -6,6 +6,8 @@ export interface MonitorCheckJob {
   url: string;
 }
 
+export const monitorQueueConnection = createRedisConnection();
+
 export const monitorQueue = new Queue<MonitorCheckJob>("monitor-checks", {
-  connection: createRedisConnection(),
+  connection: monitorQueueConnection,
 });
