@@ -1,13 +1,10 @@
 import Fastify from "fastify";
-import type { Monitor } from "./monitoring/monitor.js";
-import { checkUrl } from "./monitoring/check-url.js";
+import { prisma } from "./lib/prisma.js";
+import { monitorQueue } from "./queue/monitor-queue.js";
 
 const app = Fastify({
   logger: true,
 });
-
-const monitors: Monitor[] = [];
-let nextMonitorId = 1;
 
 app.get("/health", async () => {
   return {
@@ -17,7 +14,19 @@ app.get("/health", async () => {
 });
 
 app.get("/monitors", async () => {
-  return monitors;
+  return prisma.monitor.findMany({
+    include: {
+      checks: {
+        orderBy: {
+          checkedAt: "desc",
+        },
+        take: 1,
+      },
+    },
+    orderBy: {
+      createdAt: "desc",
+    },
+  });
 });
 
 app.post<{
@@ -56,18 +65,21 @@ app.post<{
       });
     }
 
-    const monitor: Monitor = {
-      id: nextMonitorId++,
-      url: parsedUrl.toString(),
-      createdAt: new Date().toISOString(),
-      lastCheck: null,
-    };
+    const monitor = await prisma.monitor.create({
+      data: {
+        url: parsedUrl.toString(),
+      },
+    });
 
-    monitor.lastCheck = await checkUrl(monitor.url);
+    await monitorQueue.add("check-monitor", {
+      monitorId: monitor.id,
+      url: monitor.url,
+    });
 
-    monitors.push(monitor);
-
-    return reply.code(201).send(monitor);
+    return reply.code(202).send({
+      message: "Monitor created; check queued",
+      monitor,
+    });
   },
 );
 
@@ -82,5 +94,14 @@ const start = async () => {
     process.exit(1);
   }
 };
+
+const shutdown = async () => {
+  await app.close();
+  await prisma.$disconnect();
+  process.exit(0);
+};
+
+process.on("SIGINT", shutdown);
+process.on("SIGTERM", shutdown);
 
 start();
