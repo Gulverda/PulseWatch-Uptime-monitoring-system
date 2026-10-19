@@ -192,7 +192,7 @@ As a **Platform Admin**, I want paid plans with higher limits, so that the platf
 | US-04 | პაუზა / აღდგენა / წაშლა | Must | 2 | Done |
 | US-05 | შემოწმებების ისტორია | Must | 2 | Done |
 | US-06 | Uptime სტატისტიკა | Must | 3 | Done |
-| BUG-01 | Resume ინტერვალის bug | Must | 1 | Backlog |
+| BUG-01 | Resume ინტერვალის bug | Must | 1 | Done |
 | US-07 | რეგისტრაცია / ავტორიზაცია | Must | 5 | Backlog |
 | US-08 | მონიტორების ownership | Must | 3 | Backlog |
 | US-09 | ინციდენტები | Must | 5 | Backlog |
@@ -209,7 +209,7 @@ As a **Platform Admin**, I want paid plans with higher limits, so that the platf
 | US-20 | ბილინგი | Won't | – | – |
 
 **ჯამი კატეგორიების მიხედვით:**
-- **Must:** 40 ქულა (18 ქულა უკვე შესრულებულია, 22 დარჩენილია)
+- **Must:** 40 ქულა (19 ქულა უკვე შესრულებულია, 21 დარჩენილია)
 - **Should:** 16 ქულა
 - **Could:** 14 ქულა
 - **Won't:** 1 story
