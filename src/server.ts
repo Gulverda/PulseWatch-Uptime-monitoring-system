@@ -130,7 +130,7 @@ app.patch<{ Params: { id: string } }>(
       data: { isActive: true },
     });
 
-    await scheduleMonitor(monitor.id, monitor.url);
+    await scheduleMonitor(monitor.id, monitor.url, monitor.intervalSeconds);
 
     await monitorQueue.add(
       "check-monitor",
